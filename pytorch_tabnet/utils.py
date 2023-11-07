@@ -149,9 +149,7 @@ def create_sampler(weights, y_train):
     return need_shuffle, sampler
 
 
-def create_dataloaders(
-    X_train, y_train, eval_set, weights, batch_size, num_workers, drop_last, pin_memory
-):
+def create_dataloaders(X_train, y_train, eval_set, weights, batch_size, num_workers, drop_last, pin_memory):
     """
     Create dataloaders with or without subsampling depending on weights and balanced.
 
@@ -234,7 +232,6 @@ def create_dataloaders(
 
     return train_dataloader, valid_dataloaders
 
-
 def create_explain_matrix(input_dim, cat_emb_dim, cat_idxs, post_embed_dim):
     """
     This is a computational trick.
@@ -283,7 +280,6 @@ def create_explain_matrix(input_dim, cat_emb_dim, cat_idxs, post_embed_dim):
 
     return scipy.sparse.csc_matrix(reducing_matrix)
 
-
 def create_group_matrix(list_groups, input_dim):
     """
     Create the group matrix corresponding to the given list_groups
@@ -330,8 +326,6 @@ def create_group_matrix(list_groups, input_dim):
             group_matrix[current_group_idx, remaining_feat_idx] = 1
             current_group_idx += 1
         return group_matrix
-
-
 def check_list_groups(list_groups, input_dim):
     """
     Check that list groups:
@@ -370,7 +364,6 @@ def check_list_groups(list_groups, input_dim):
     assert highest_feat < input_dim, f"Number of features is {input_dim} but one group contains {highest_feat}."  # noqa
     return
 
-
 def filter_weights(weights):
     """
     This function makes sure that weights are in correct format for
@@ -393,7 +386,6 @@ def filter_weights(weights):
     if isinstance(weights, dict):
         raise ValueError(err_msg + "Dict given.")
     return
-
 
 def validate_eval_set(eval_set, eval_name, X_train, y_train):
     """Check if the shapes of eval_set are compatible with (X_train, y_train).
@@ -461,7 +453,6 @@ def validate_eval_set(eval_set, eval_name, X_train, y_train):
 
     return eval_name, eval_set
 
-
 def define_device(device_name):
     """
     Define the device to use during training and inference.
@@ -487,14 +478,12 @@ def define_device(device_name):
     else:
         return device_name
 
-
 class ComplexEncoder(json.JSONEncoder):
     def default(self, obj):
         if isinstance(obj, (np.generic, np.ndarray)):
             return obj.tolist()
         # Let the base class default method raise the TypeError
         return json.JSONEncoder.default(self, obj)
-
 
 def check_input(X):
     """
@@ -506,7 +495,6 @@ def check_input(X):
         raise TypeError(err_message)
     check_array(X, accept_sparse=True)
 
-
 def check_warm_start(warm_start, from_unsupervised):
     """
     Gives a warning about ambiguous usage of the two parameters.
@@ -516,7 +504,6 @@ def check_warm_start(warm_start, from_unsupervised):
         warn_msg = "warm_start will be ignore, training will start from unsupervised weights"
         warnings.warn(warn_msg)
     return
-
 
 def check_embedding_parameters(cat_dims, cat_idxs, cat_emb_dim):
     """
