@@ -22,8 +22,6 @@ from pytorch_tabnet.metrics import (
 )
 from pytorch_tabnet.abstract_model import TabModel
 import scipy
-
-
 class TabNetPretrainer(TabModel):
     def __post_init__(self):
         super(TabNetPretrainer, self).__post_init__()

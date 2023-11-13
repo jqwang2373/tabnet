@@ -38,7 +38,6 @@ import warnings
 import copy
 import scipy
 
-
 @dataclass
 class TabModel(BaseEstimator):
     """ Class for TabNet model."""
@@ -190,7 +189,6 @@ class TabModel(BaseEstimator):
             Whether to compute feature importance
         """
         # update model name
-
         self.max_epochs = max_epochs
         self.patience = patience
         self.batch_size = batch_size
@@ -202,35 +200,27 @@ class TabModel(BaseEstimator):
         self.pin_memory = pin_memory and (self.device.type != "cpu")
         self.augmentations = augmentations
         self.compute_importance = compute_importance
-
         if self.augmentations is not None:
             # This ensure reproducibility
             self.augmentations._set_seed()
-
         eval_set = eval_set if eval_set else []
-
         if loss_fn is None:
             self.loss_fn = self._default_loss
         else:
             self.loss_fn = loss_fn
-
         check_input(X_train)
         check_warm_start(warm_start, from_unsupervised)
-
         self.update_fit_params(
             X_train,
             y_train,
             eval_set,
             weights,
         )
-
         # Validate and reformat eval set depending on training data
         eval_names, eval_set = validate_eval_set(eval_set, eval_name, X_train, y_train)
-
         train_dataloader, valid_dataloaders = self._construct_loaders(
             X_train, y_train, eval_set
         )
-
         if from_unsupervised is not None:
             # Update parameters to match self pretraining
             self.__update__(**from_unsupervised.get_params())
@@ -242,25 +232,19 @@ class TabModel(BaseEstimator):
         self._set_metrics(eval_metric, eval_names)
         self._set_optimizer()
         self._set_callbacks(callbacks)
-
         if from_unsupervised is not None:
             self.load_weights_from_unsupervised(from_unsupervised)
             warnings.warn("Loading weights from unsupervised pretraining")
         # Call method on_train_begin for all callbacks
         self._callback_container.on_train_begin()
-
         # Training loop over epochs
         for epoch_idx in range(self.max_epochs):
-
             # Call method on_epoch_begin for all callbacks
             self._callback_container.on_epoch_begin(epoch_idx)
-
             self._train_epoch(train_dataloader)
-
             # Apply predict epoch to all eval sets
             for eval_name, valid_dataloader in zip(eval_names, valid_dataloaders):
                 self._predict_epoch(eval_name, valid_dataloader)
-
             # Call method on_epoch_end for all callbacks
             self._callback_container.on_epoch_end(
                 epoch_idx, logs=self.history.epoch_metrics
@@ -268,15 +252,12 @@ class TabModel(BaseEstimator):
 
             if self._stop_training:
                 break
-
         # Call method on_train_end for all callbacks
         self._callback_container.on_train_end()
         self.network.eval()
-
         if self.compute_importance:
             # compute feature importance once the best model is defined
             self.feature_importances_ = self._compute_feature_importances(X_train)
-
     def predict(self, X):
         """
         Make predictions on a batch (valid)
@@ -314,7 +295,6 @@ class TabModel(BaseEstimator):
             results.append(predictions)
         res = np.vstack(results)
         return self.predict_func(res)
-
     def explain(self, X, normalize=False):
         """
         Return local explanation
@@ -374,7 +354,6 @@ class TabModel(BaseEstimator):
             res_explain /= np.sum(res_explain, axis=1)[:, None]
 
         return res_explain, res_masks
-
     def load_weights_from_unsupervised(self, unsupervised_model):
         update_state_dict = copy.deepcopy(self.network.state_dict())
         for param, weights in unsupervised_model.network.state_dict().items():
@@ -388,11 +367,9 @@ class TabModel(BaseEstimator):
                 update_state_dict[new_param] = weights
 
         self.network.load_state_dict(update_state_dict)
-
     def load_class_attrs(self, class_attrs):
         for attr_name, attr_value in class_attrs.items():
             setattr(self, attr_name, attr_value)
-
     def save_model(self, path):
         """Saving TabNet model in two distinct files.
 
@@ -435,7 +412,6 @@ class TabModel(BaseEstimator):
         shutil.rmtree(path)
         print(f"Successfully saved model at {path}.zip")
         return f"{path}.zip"
-
     def load_model(self, filepath):
         """Load TabNet model.
 
@@ -471,7 +447,6 @@ class TabModel(BaseEstimator):
         self.load_class_attrs(loaded_params["class_attrs"])
 
         return
-
     def _train_epoch(self, train_loader):
         """
         Trains one epoch of the network in self.network
@@ -494,7 +469,6 @@ class TabModel(BaseEstimator):
         self.history.epoch_metrics.update(epoch_logs)
 
         return
-
     def _train_batch(self, X, y):
         """
         Trains one batch of data
@@ -539,7 +513,6 @@ class TabModel(BaseEstimator):
         batch_logs["loss"] = loss.cpu().detach().numpy().item()
 
         return batch_logs
-
     def _predict_epoch(self, name, loader):
         """
         Predict an epoch and update metrics.
@@ -569,7 +542,6 @@ class TabModel(BaseEstimator):
         self.network.train()
         self.history.epoch_metrics.update(metrics_logs)
         return
-
     def _predict_batch(self, X):
         """
         Predict one batch of data.
@@ -595,7 +567,6 @@ class TabModel(BaseEstimator):
             scores = scores.cpu().detach().numpy()
 
         return scores
-
     def _set_network(self):
         """Setup the network and explain matrix."""
         torch.manual_seed(self.seed)
@@ -627,7 +598,6 @@ class TabModel(BaseEstimator):
             self.network.cat_idxs,
             self.network.post_embed_dim,
         )
-
     def _set_metrics(self, metrics, eval_names):
         """Set attributes relative to the metrics.
 
@@ -659,7 +629,6 @@ class TabModel(BaseEstimator):
         self.early_stopping_metric = (
             self._metrics_names[-1] if len(self._metrics_names) > 0 else None
         )
-
     def _set_callbacks(self, custom_callbacks):
         """Setup the callbacks functions.
 
@@ -702,13 +671,11 @@ class TabModel(BaseEstimator):
             callbacks.extend(custom_callbacks)
         self._callback_container = CallbackContainer(callbacks)
         self._callback_container.set_trainer(self)
-
     def _set_optimizer(self):
         """Setup optimizer."""
         self._optimizer = self.optimizer_fn(
             self.network.parameters(), **self.optimizer_params
         )
-
     def _construct_loaders(self, X_train, y_train, eval_set):
         """Generate dataloaders for train and eval set.
 
@@ -746,15 +713,12 @@ class TabModel(BaseEstimator):
             self.pin_memory,
         )
         return train_dataloader, valid_dataloaders
-
     def _compute_feature_importances(self, X):
         """Compute global feature importance.
-
         Parameters
         ----------
         loader : `torch.utils.data.Dataloader`
             Pytorch dataloader.
-
         """
         M_explain, _ = self.explain(X, normalize=False)
         sum_explain = M_explain.sum(axis=0)

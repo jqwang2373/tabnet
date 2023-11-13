@@ -8,7 +8,7 @@ from sklearn.utils import check_array
 import pandas as pd
 import warnings
 
-
+# Define custom datasets for Torch
 class TorchDataset(Dataset):
     """
     Format for numpy array
@@ -232,6 +232,7 @@ def create_dataloaders(X_train, y_train, eval_set, weights, batch_size, num_work
 
     return train_dataloader, valid_dataloaders
 
+
 def create_explain_matrix(input_dim, cat_emb_dim, cat_idxs, post_embed_dim):
     """
     This is a computational trick.
@@ -280,6 +281,7 @@ def create_explain_matrix(input_dim, cat_emb_dim, cat_idxs, post_embed_dim):
 
     return scipy.sparse.csc_matrix(reducing_matrix)
 
+
 def create_group_matrix(list_groups, input_dim):
     """
     Create the group matrix corresponding to the given list_groups
@@ -326,6 +328,8 @@ def create_group_matrix(list_groups, input_dim):
             group_matrix[current_group_idx, remaining_feat_idx] = 1
             current_group_idx += 1
         return group_matrix
+
+
 def check_list_groups(list_groups, input_dim):
     """
     Check that list groups:
@@ -347,6 +351,12 @@ def check_list_groups(list_groups, input_dim):
         return
     else:
         for group_pos, group in enumerate(list_groups):
+            assert isinstance(group, list), f"group {group_pos} is not a list"
+            assert len(group) > 0, f"group {group_pos} is empty"
+            assert len(group) == len(set(group)), f"group {group_pos} contains duplicates"
+            assert all(
+                [feat_idx < input_dim for feat_idx in group]
+            ), f"group {group_pos} contains unknown features (>= input_dim)"
             msg = f"Groups must be given as a list of list, but found {group} in position {group_pos}."  # noqa
             assert isinstance(group, list), msg
             assert len(group) > 0, "Empty groups are forbidding please remove empty groups []"

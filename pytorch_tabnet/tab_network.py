@@ -4,21 +4,28 @@ import numpy as np
 from torch import nn
 from torch.autograd import Function
 import torch.nn.functional as F
-
+from collections.abc import Sequence
+from itertools import chain
+from scipy.sparse import issparse
+from scipy.sparse.base import spmatrix
+from scipy.sparse import dok_matrix
+from scipy.sparse import lil_matrix
+import scipy.sparse as sp
+import numpy as np
+import pandas as pd
+from pytorch_tabnet.utils import *
+from pytorch_tabnet.abstract_model import TabModel
 def _make_ix_like(input, dim=0):
+    # This helper function creates a tensor of indices of the same shape as the input
     d = input.size(dim)
     rho = torch.arange(1, d + 1, device=input.device, dtype=input.dtype)
     view = [1] * input.dim()
     view[0] = -1
     return rho.view(view).transpose(0, dim)
-
 class SparsemaxFunction(Function):
-    """
-    An implementation of sparsemax (Martins & Astudillo, 2016). See
-    :cite:`DBLP:journals/corr/MartinsA16` for detailed description.
-    By Ben Peters and Vlad Niculae
-    """
-
+    # this class is the implementation of the sparsemax function
+    # the sparsemax function is used in the attention mechanism
+    # the sparsemax function is a smooth version of the argmax function
     @staticmethod
     def forward(ctx, input, dim=-1):
         """sparsemax: normalizing sparse transform (a la softmax)
@@ -44,7 +51,6 @@ class SparsemaxFunction(Function):
         output = torch.clamp(input - tau, min=0)
         ctx.save_for_backward(supp_size, output)
         return output
-
     @staticmethod
     def backward(ctx, grad_output):
         supp_size, output = ctx.saved_tensors
@@ -56,7 +62,6 @@ class SparsemaxFunction(Function):
         v_hat = v_hat.unsqueeze(dim)
         grad_input = torch.where(output != 0, grad_input - v_hat, grad_input)
         return grad_input, None
-
     @staticmethod
     def _threshold_and_support(input, dim=-1):
         """Sparsemax building block: compute the threshold
@@ -92,129 +97,41 @@ class Sparsemax(nn.Module):
         super(Sparsemax, self).__init__()
     def forward(self, input):
         return sparsemax(input, self.dim)
-
-class Entmax15Function(Function):
-    """
-    An implementation of exact Entmax with alpha=1.5 (B. Peters, V. Niculae, A. Martins). See
-    :cite:`https://arxiv.org/abs/1905.05702 for detailed description.
-    Source: https://github.com/deep-spin/entmax
-    """
-
-    @staticmethod
-    def forward(ctx, input, dim=-1):
-        ctx.dim = dim
-
-        max_val, _ = input.max(dim=dim, keepdim=True)
-        input = input - max_val  # same numerical stability trick as for softmax
-        input = input / 2  # divide by 2 to solve actual Entmax
-
-        tau_star, _ = Entmax15Function._threshold_and_support(input, dim)
-        output = torch.clamp(input - tau_star, min=0) ** 2
-        ctx.save_for_backward(output)
-        return output
-
-    @staticmethod
-    def backward(ctx, grad_output):
-        Y, = ctx.saved_tensors
-        gppr = Y.sqrt()  # = 1 / g'' (Y)
-        dX = grad_output * gppr
-        q = dX.sum(ctx.dim) / gppr.sum(ctx.dim)
-        q = q.unsqueeze(ctx.dim)
-        dX -= q * gppr
-        return dX, None
-
-    @staticmethod
-    def _threshold_and_support(input, dim=-1):
-        Xsrt, _ = torch.sort(input, descending=True, dim=dim)
-
-        rho = _make_ix_like(input, dim)
-        mean = Xsrt.cumsum(dim) / rho
-        mean_sq = (Xsrt ** 2).cumsum(dim) / rho
-        ss = rho * (mean_sq - mean ** 2)
-        delta = (1 - ss) / rho
-
-        # NOTE this is not exactly the same as in reference algo
-        # Fortunately it seems the clamped values never wrongly
-        # get selected by tau <= sorted_z. Prove this!
-        delta_nz = torch.clamp(delta, 0)
-        tau = mean - torch.sqrt(delta_nz)
-
-        support_size = (tau <= Xsrt).sum(dim).unsqueeze(dim)
-        tau_star = tau.gather(dim, support_size - 1)
-        return tau_star, support_size
-
-class Entmoid15(Function):
-    """ A highly optimized equivalent of lambda x: Entmax15([x, 0]) """
-
-    @staticmethod
-    def forward(ctx, input):
-        output = Entmoid15._forward(input)
-        ctx.save_for_backward(output)
-        return output
-
-    @staticmethod
-    def _forward(input):
-        input, is_pos = abs(input), input >= 0
-        tau = (input + torch.sqrt(F.relu(8 - input ** 2))) / 2
-        tau.masked_fill_(tau <= input, 2.0)
-        y_neg = 0.25 * F.relu(tau - input, inplace=True) ** 2
-        return torch.where(is_pos, 1 - y_neg, y_neg)
-
-    @staticmethod
-    def backward(ctx, grad_output):
-        return Entmoid15._backward(ctx.saved_tensors[0], grad_output)
-
-    @staticmethod
-    def _backward(output, grad_output):
-        gppr0, gppr1 = output.sqrt(), (1 - output).sqrt()
-        grad_input = grad_output * gppr0
-        q = grad_input / (gppr0 + gppr1)
-        grad_input -= q * gppr0
-        return grad_input
-
-entmax15 = Entmax15Function.apply
-entmoid15 = Entmoid15.apply
-class Entmax15(nn.Module):
-
-    def __init__(self, dim=-1):
-        self.dim = dim
-        super(Entmax15, self).__init__()
-
-    def forward(self, input):
-        return entmax15(input, self.dim)
-
 def initialize_non_glu(module, input_dim, output_dim):
+    # this is the initialization of the weights of the network
+
     gain_value = np.sqrt((input_dim + output_dim) / np.sqrt(4 * input_dim))
     torch.nn.init.xavier_normal_(module.weight, gain=gain_value)
     # torch.nn.init.zeros_(module.bias)
     return
-
 def initialize_glu(module, input_dim, output_dim):
+    # this is the initialization of the weights of the network
     gain_value = np.sqrt((input_dim + output_dim) / np.sqrt(input_dim))
     torch.nn.init.xavier_normal_(module.weight, gain=gain_value)
     # torch.nn.init.zeros_(module.bias)
     return
-
 class GBN(torch.nn.Module):
-    """
-    Ghost Batch Normalization
-    https://arxiv.org/abs/1705.08741
-    """
-
+    # this is the ghost batch normalization
     def __init__(self, input_dim, virtual_batch_size=128, momentum=0.01):
         super(GBN, self).__init__()
-
         self.input_dim = input_dim
         self.virtual_batch_size = virtual_batch_size
         self.bn = BatchNorm1d(self.input_dim, momentum=momentum)
-
     def forward(self, x):
         chunks = x.chunk(int(np.ceil(x.shape[0] / self.virtual_batch_size)), 0)
         res = [self.bn(x_) for x_ in chunks]
-
         return torch.cat(res, dim=0)
-
 class TabNetEncoder(torch.nn.Module):
+    # this is the main part of the network,
+    # it is composed of multiple GLU blocks
+    # each GLU block is composed of a feature transformer and an attention transformer
+    # the output of each GLU block is summed with the output of the previous GLU block
+    # the output of each GLU block is sent to the output layer
+    # the output of each GLU block is also used to update the attention mask
+    # the output of each GLU block is also sent to the next GLU block
+    # the output of the last GLU block is the output of the network
+    # the feature transformer is a linear layer followed by a batch normalization layer
+    # the attention transformer is a linear layer followed by a batch normalization layer
     def __init__(
         self,
         input_dim,
@@ -364,6 +281,9 @@ class TabNetEncoder(torch.nn.Module):
         return steps_output, M_loss
 
     def forward_masks(self, x):
+        #the forward mask function is used to explain the network
+        #it returns the masks of each step
+
         x = self.initial_bn(x)
         bs = x.shape[0]  # batch size
         prior = torch.ones((bs, self.attention_dim)).to(x.device)
@@ -388,8 +308,19 @@ class TabNetEncoder(torch.nn.Module):
             att = out[:, self.n_d :]
 
         return M_explain, masks
-
 class TabNetDecoder(torch.nn.Module):
+    # this is the decoder part of the network
+    # it is composed of multiple GLU blocks
+    # each GLU block is composed of a feature transformer and an attention transformer
+    # the output of each GLU block is summed with the output of the previous GLU block
+    # the output of each GLU block is sent to the output layer
+    # the output of each GLU block is also used to update the attention mask
+    # the output of each GLU block is also sent to the next GLU block
+    # the output of the last GLU block is the output of the network
+    # the feature transformer is a linear layer followed by a batch normalization layer
+    # the attention transformer is a linear layer followed by a batch normalization layer
+    # the decoder is used to reconstruct the input from the output of the encoder
+
     def __init__(
         self,
         input_dim,
@@ -463,7 +394,6 @@ class TabNetDecoder(torch.nn.Module):
             res = torch.add(res, x)
         res = self.reconstruction_layer(res)
         return res
-
 class TabNetPretraining(torch.nn.Module):
     def __init__(
         self,
@@ -568,8 +498,18 @@ class TabNetPretraining(torch.nn.Module):
     def forward_masks(self, x):
         embedded_x = self.embedder(x)
         return self.encoder.forward_masks(embedded_x)
-
 class TabNetNoEmbeddings(torch.nn.Module):
+    # this is the main part of the network,
+    # it is composed of multiple GLU blocks
+    # each GLU block is composed of a feature transformer and an attention transformer
+    # the output of each GLU block is summed with the output of the previous GLU block
+    # the output of each GLU block is sent to the output layer
+    # the output of each GLU block is also used to update the attention mask
+    # the output of each GLU block is also sent to the next GLU block
+    # the output of the last GLU block is the output of the network
+    # the feature transformer is a linear layer followed by a batch normalization layer
+    # the attention transformer is a linear layer followed by a batch normalization layer
+    # the no embedding network is used to train the network without embeddings, the embeddings are trained separately
     def __init__(
         self,
         input_dim,
@@ -676,8 +616,11 @@ class TabNetNoEmbeddings(torch.nn.Module):
 
     def forward_masks(self, x):
         return self.encoder.forward_masks(x)
-
 class TabNet(torch.nn.Module):
+    #this is the main part of the network,
+    #from the large input, the network extracts the embeddings
+    #the embeddings are then sent to the main part of the network
+    #the main part of the network is composed of multiple GLU blocks
     def __init__(
         self,
         input_dim,
@@ -738,6 +681,12 @@ class TabNet(torch.nn.Module):
         group_attention_matrix : torch matrix
             Matrix of size (n_groups, input_dim), m_ij = importance within group i of feature j
         """
+        #The whole network is defined in this class
+        #The network is composed of an embedding step, a feature transformer and an output step
+        #The feature transformer is composed of several blocks of GLU layers and an attention transformer
+        #The attention transformer is composed of a linear layer, a batch normalization and a sparsemax layer
+        #The output step is a linear layer
+
         super(TabNet, self).__init__()
         self.cat_idxs = cat_idxs or []
         self.cat_dims = cat_dims or []
@@ -783,6 +732,7 @@ class TabNet(torch.nn.Module):
             self.embedder.embedding_group_matrix
         )
 
+
     def forward(self, x):
         x = self.embedder(x)
         return self.tabnet(x)
@@ -790,8 +740,13 @@ class TabNet(torch.nn.Module):
     def forward_masks(self, x):
         x = self.embedder(x)
         return self.tabnet.forward_masks(x)
-
 class AttentiveTransformer(torch.nn.Module):
+    #This class is used to define the attention transformer
+    #The attention transformer is composed of a linear layer, a batch normalization and a sparsemax layer
+    #The sparsemax layer is used to select the most important features
+    #The batch normalization is used to normalize the output of the linear layer
+    #The linear layer is used to compute the importance of each feature
+
     def __init__(
         self,
         input_dim,
@@ -841,7 +796,6 @@ class AttentiveTransformer(torch.nn.Module):
         x = torch.mul(x, priors)
         x = self.selector(x)
         return x
-
 class FeatTransformer(torch.nn.Module):
     def __init__(
         self,
@@ -852,6 +806,13 @@ class FeatTransformer(torch.nn.Module):
         virtual_batch_size=128,
         momentum=0.02,
     ):
+        #This class is used to define the feature transformer
+        #The feature transformer is composed of several blocks of GLU layers and an attention transformer
+        #The GLU layers are used to extract the features
+        #The attention transformer is used to select the most important features
+        #The batch normalization is used to normalize the output of the linear layer
+        #The linear layer is used to compute the importance of each feature
+
         super(FeatTransformer, self).__init__()
         """
         Initialize a feature transformer.
@@ -907,8 +868,11 @@ class FeatTransformer(torch.nn.Module):
         x = self.shared(x)
         x = self.specifics(x)
         return x
-
 class GLU_Block(torch.nn.Module):
+    #This class is used to define the GLU block
+    #The GLU block is composed of several GLU layers
+    #The GLU layers are used to extract the features
+
     """
     Independent GLU block, specific to each step
     """
@@ -949,8 +913,14 @@ class GLU_Block(torch.nn.Module):
             x = torch.add(x, self.glu_layers[glu_id](x))
             x = x * scale
         return x
-
 class GLU_Layer(torch.nn.Module):
+    #This class is used to define the GLU layer
+    #The GLU layer is used to extract the features
+    #The GLU layer is composed of a linear layer, a batch normalization and a GLU activation function
+    #The batch normalization is used to normalize the output of the linear layer
+    #The linear layer is used to compute the importance of each feature
+    #The GLU activation function is used to extract the features
+
     def __init__(
         self, input_dim, output_dim, fc=None, virtual_batch_size=128, momentum=0.02
     ):
@@ -972,8 +942,13 @@ class GLU_Layer(torch.nn.Module):
         x = self.bn(x)
         out = torch.mul(x[:, : self.output_dim], torch.sigmoid(x[:, self.output_dim :]))
         return out
-
 class EmbeddingGenerator(torch.nn.Module):
+    #The embedding generator is composed of an embedding layer for each categorical feature
+    #The embedding layer is used to generate the embeddings of the categorical features
+    #The embeddings consist of a vector of size cat_emb_dim
+
+
+
     """
     Classical embeddings generator
     """
@@ -1060,41 +1035,41 @@ class EmbeddingGenerator(torch.nn.Module):
         # concat
         post_embeddings = torch.cat(cols, dim=1)
         return post_embeddings
+class TabNetRegressor(TabModel):
+    def __post_init__(self):
+        super(TabNetRegressor, self).__post_init__()
+        self._task = 'regression'
+        self._default_loss = torch.nn.functional.mse_loss
+        self._default_metric = 'mse'
 
-class RandomObfuscator(torch.nn.Module):
-    """
-    Create and applies obfuscation masks.
-    The obfuscation is done at group level to match attention.
-    """
+    def prepare_target(self, y):
+        return y
 
-    def __init__(self, pretraining_ratio, group_matrix):
-        """
-        This create random obfuscation for self suppervised pretraining
-        Parameters
-        ----------
-        pretraining_ratio : float
-            Ratio of feature to randomly discard for reconstruction
+    def compute_loss(self, y_pred, y_true):
+        return self.loss_fn(y_pred, y_true)
 
-        """
-        super(RandomObfuscator, self).__init__()
-        self.pretraining_ratio = pretraining_ratio
-        # group matrix is set to boolean here to pass all posssible information
-        self.group_matrix = (group_matrix > 0) + 0.
-        self.num_groups = group_matrix.shape[0]
+    def update_fit_params(
+        self,
+        X_train,
+        y_train,
+        eval_set,
+        weights
+    ):
+        if len(y_train.shape) != 2:
+            msg = "Targets should be 2D : (n_samples, n_regression) " + \
+                  f"but y_train.shape={y_train.shape} given.\n" + \
+                  "Use reshape(-1, 1) for single regression."
+            raise ValueError(msg)
+        self.output_dim = y_train.shape[1]
+        self.preds_mapper = None
 
-    def forward(self, x):
-        """
-        Generate random obfuscation mask.
+        self.updated_weights = weights
+        filter_weights(self.updated_weights)
 
-        Returns
-        -------
-        masked input and obfuscated variables.
-        """
-        bs = x.shape[0]
+    def predict_func(self, outputs):
+        return outputs
 
-        obfuscated_groups = torch.bernoulli(
-            self.pretraining_ratio * torch.ones((bs, self.num_groups), device=x.device)
-        )
-        obfuscated_vars = torch.matmul(obfuscated_groups, self.group_matrix)
-        masked_input = torch.mul(1 - obfuscated_vars, x)
-        return masked_input, obfuscated_groups, obfuscated_vars
+    def stack_batches(self, list_y_true, list_y_score):
+        y_true = np.vstack(list_y_true)
+        y_score = np.vstack(list_y_score)
+        return y_true, y_score
